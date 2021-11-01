@@ -19,8 +19,6 @@
 #define LFH_BASE_SIZE 30
 
 
-//#pragma pack(1)
-//#pragma pack(push, 1)
 // Local file headers
 #pragma pack(push, 1)
 struct LFH {
