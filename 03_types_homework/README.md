@@ -1,9 +1,9 @@
 # 03_types_homework
 
-Задание.
+### Задание. 
 Написать программу, определяющую, является ли заданный файл т.н. Rarjpeg-ом (изображением, в конец которого дописан архив), и выводящую список файлов в архиве, если заданный файл таковым является. Для простоты подразумевается формат архива zip, а не rar. Сторонние библиотеки не использовать.
 
-Compile
-gcc -Wall -Wextra -Wpedantic -std=c11 rjpeg.c -o rjpeg
-RUN
-rjpeg /path/to/rar.jpeg
+### Compile. 
+    gcc -Wall -Wextra -Wpedantic -std=c11 rjpeg.c -o rjpeg
+### RUN. 
+    rjpeg /path/to/rar.jpeg
