@@ -14,9 +14,6 @@
 #define LFH_SIGNATURE 0x04034b50
 #define CDFH_SIGNATURE 0x02014b50
 #define EOCDR_SIGNATURE 0x06054b50
-#define CDFH_BASE_SIZE 46  //base size for cdfh
-#define EOCDR_BASE_SIZE 22 //base size for eocdr
-#define LFH_BASE_SIZE 30
 
 
 // Local file headers
@@ -54,7 +51,7 @@ struct CDFH {
     uint16_t extra_field_length;        /* The length of the extra field below. */
     uint16_t file_comm_len;             /* the length of the file comment */
     uint16_t disk_start;                /* The number of the disk on which this file exists */
-    uint32_t internal_attr;             /* Internal file attributes Bit 0–16*/
+    uint16_t internal_attr;             /* Internal file attributes Bit 0–16*/
     uint32_t external_attr;             /* External file attributes: host-system dependent*/
     uint32_t offset_of_local_header;    /* Relative offset of local header. Offset of where to find the corresponding local file header from the start of the first disk.*/
 };
@@ -76,9 +73,9 @@ struct EOCDR {
 
 
 static int find_eocdr(struct EOCDR *, uint8_t *, size_t);
-static int find_cdfh(uint8_t *, size_t *);
-static int find_lfh(uint8_t *, size_t *);
-static int iterate_entries(struct EOCDR *eocdr, uint8_t *src, size_t entries, size_t filesize);
+static int find_cdfh(struct CDFH *, uint8_t *, size_t *);
+static int find_lfh(struct LFH *, uint8_t *, size_t);
+static int iterate_entries(struct EOCDR *, uint8_t *, size_t);
 static void calculate_offset(size_t, size_t, size_t, size_t *, size_t *);
 static uint8_t* read_file(const char *, size_t *);
 
@@ -96,98 +93,88 @@ int main(int argc, char *argv[]){
     
     if (!find_eocdr(&eocdr, rawdata, filesize)) {
         perror("ERROR while searching end of central directory record. This is not a zip file");
-        return 0;
+        free(rawdata);
+        exit(EXIT_FAILURE);
+    }
+    if (!iterate_entries(&eocdr, rawdata, filesize)) {
+        perror("ERROR while iterate central directory records.");
+        free(rawdata);
+        exit(EXIT_FAILURE);
     }
     
-    //iterarte over zip
-    iterate_entries(&eocdr, rawdata, eocdr.disk_entries, filesize);
-    
+
     //free buffer from read_file
     free(rawdata);
     
     return 0;
 }
 
-
 static int find_eocdr(struct EOCDR *eocdr, uint8_t *src, size_t src_len)
 {
     size_t oecdr_offset = src_len - sizeof(struct EOCDR);
-
-    while (oecdr_offset <= src_len) {
-        memcpy(eocdr, &src[oecdr_offset], sizeof(struct EOCDR));
-        if (eocdr->signature == EOCDR_SIGNATURE) {
-            printf("---------------------------------\n");
-            printf("Found contents:\n");
-            return 1;
-        }
-        oecdr_offset++;
+    memcpy(eocdr, &src[oecdr_offset], sizeof(struct EOCDR));
+    if (eocdr->signature != EOCDR_SIGNATURE) {
+        return 0;
     }
+    printf("---------------------------------\n");
+    printf("Found contents:\n");
+    return 1;
 
-    return 0;
 }
 
-static void calculate_offset(size_t central_directory_size, size_t offset_of_cd, size_t filesize, size_t *offset, size_t *offset_lh){
-    size_t x, offset_cd, size_cd;
-    
-    size_cd = central_directory_size;
-    offset_cd = offset_of_cd;
-    x = filesize - EOCDR_BASE_SIZE - size_cd; // 22 – base size for eocdr
-    *offset = x;
-    *offset_lh = x - offset_cd;
-}
-
-static int find_cdfh(uint8_t *src, size_t *offset){
+static int iterate_entries(struct EOCDR *eocdr, uint8_t *src, size_t src_len){
     struct CDFH cdfh;
-    memcpy(&cdfh, &src[*offset], CDFH_BASE_SIZE);
-    if (cdfh.signature != CDFH_SIGNATURE) {
-        return 0;
-    }
-    
-    *offset += CDFH_BASE_SIZE + cdfh.file_name_length \
-                            + cdfh.extra_field_length \
-                            + cdfh.file_comm_len;
-    return 1;
-}
-
-static int find_lfh(uint8_t *src, size_t *offset_lh){
     struct LFH lfh;
-    int is_lfh = 0;
-    while(!is_lfh){
-        memcpy(&lfh, &src[*offset_lh], LFH_BASE_SIZE);
-        if (lfh.signature == LFH_SIGNATURE) {
-            printf("---------------------------------\n");
-            char filename[lfh.file_name_length];
-            memset(filename, '\0', lfh.file_name_length + 1);
-            memcpy(filename, &src[*offset_lh + LFH_BASE_SIZE], lfh.file_name_length);
-            printf("File -> %s\n", filename);
-            is_lfh = 1;
-        }
-        *offset_lh += 1;
-    }
-    if(!is_lfh){
-        return 0;
-    }
-    return 1;
-}
-
-static int iterate_entries(struct EOCDR *eocdr, uint8_t *src, size_t entries, size_t filesize){
-    size_t offset, offset_lh;
-    
-    //calculate offset for first central directory file header
-    calculate_offset(eocdr->central_directory_size, eocdr->offset_of_cd, filesize, &offset, &offset_lh);
-    
+    size_t concat, offset;
+    /*  calculate offsets */
+    calculate_offset(eocdr->central_directory_size, eocdr->offset_of_cd, src_len, &offset, &concat);
     /* Read the member info. */
-    for (size_t i = 0; i < entries; ++i) {
-        if (!find_cdfh(src, &offset)) {
+    for (size_t i = 0; i < eocdr->disk_entries; ++i) {
+        if (!find_cdfh(&cdfh, src, &offset)) {
             perror("ERROR to read central directory file header");
             return 0;
         }
-        if (!find_lfh(src, &offset_lh)) {
+        size_t header_offset = cdfh.offset_of_local_header + concat;
+        if (!find_lfh(&lfh, src, header_offset)) {
             perror("ERROR to read local file header");
             return 0;
         }
+        offset += sizeof(struct CDFH) + cdfh.file_name_length +
+                                        cdfh.extra_field_length +
+                                        cdfh.file_comm_len;
+    }
+    printf("---------------------------------\n");
+    return 1;
+}
+
+static void calculate_offset(size_t size_cd, size_t offset_cd, size_t src_len, size_t *offset, size_t *concat){
+    size_t x = src_len - sizeof(struct EOCDR) - size_cd;
+    *concat = x - offset_cd;
+    /* start position for central directory */
+    *offset = offset_cd + *concat;
+}
+
+static int find_cdfh(struct CDFH *cdfh, uint8_t *src, size_t *offset){
+    memcpy(cdfh, &src[*offset], sizeof(struct CDFH));
+    if (cdfh->signature != CDFH_SIGNATURE) {
+        return 0;
     }
     return 1;
+}
+
+static int find_lfh(struct LFH *lfh, uint8_t *src, size_t offset_lh){
+    memcpy(lfh, &src[offset_lh], sizeof(struct LFH));
+    if (lfh->signature != LFH_SIGNATURE) {
+        return 0;
+    }
+    size_t file_name_length = lfh->file_name_length + 1;
+    printf("---------------------------------\n");
+    char filename[file_name_length];
+    memset(filename, '\0', file_name_length);
+    memcpy(filename, &src[offset_lh + sizeof(struct LFH)], lfh->file_name_length);
+    printf("File -> %s\n", filename);
+    return 1;
+    
 }
 
 static uint8_t* read_file(const char *filename, size_t *file_size){
@@ -214,20 +201,18 @@ static uint8_t* read_file(const char *filename, size_t *file_size){
         exit(EXIT_FAILURE);
     }
     
-    while (feof(fp) == 0) {
-        fread(bufer, *file_size, 1, fp);
-        if (ferror(fp)) {
-            perror("fread fp");
-            exit(EXIT_FAILURE);
-        }
+    
+    fread(bufer, *file_size, 1, fp);
+    if (ferror(fp)) {
+        perror("fread fp");
+        exit(EXIT_FAILURE);
     }
+    
 
     if (fclose(fp)) {
         perror("fclose fp");
         exit(EXIT_FAILURE);
     }
     
-    fclose(fp);
     return bufer;
 }
-
